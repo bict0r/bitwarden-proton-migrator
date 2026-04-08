@@ -365,9 +365,10 @@ h2 {
 
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(120px, 120px));
   gap: var(--spacing-md);
   margin-bottom: var(--spacing-lg);
+  justify-content: start;
 }
 
 .stat-item {
@@ -376,6 +377,10 @@ h2 {
   border-radius: var(--radius-md);
   text-align: center;
   border: 1px solid rgba(255, 255, 255, 0.1);
+  min-height: 80px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .stat-value {
