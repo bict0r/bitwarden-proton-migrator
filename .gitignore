@@ -1,0 +1,34 @@
+# Operating System Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+npm-debug.log*
+
+# Temporary Files
+*.tmp
+*.temp
+
+# Personal Data (DO NOT COMMIT)
+*.json
+*.csv
+*.bak
+
+# Node modules (if you add build tools later)
+node_modules/
+
+# Environment Variables
+.env
+.env.local
+chatpass.code-workspace
+GITHUB_SETUP.md
+GITHUB_SETUP.md

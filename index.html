@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="description" content="Securely migrate passwords from Bitwarden to Proton Pass. Client-side processing ensures your data never leaves your device.">
+  <meta name="theme-color" content="#0f172a">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';">
+  <title>Password Migration Tool - Bitwarden to Proton Pass</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>PM</text></svg>">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<a href="#main-content" class="skip-link">Skip to main content</a>
+
+<div class="container" id="main-content">
+  <header>
+    <h1>Password Migration Tool</h1>
+    <p class="subtitle">Convert Bitwarden → Proton Pass safely</p>
+    <p class="privacy-notice">All processing happens locally in your browser - your data never leaves your device</p>
+  </header>
+
+  <!-- STEP 1 -->
+  <section class="card" aria-labelledby="step1-heading">
+    <h2 id="step1-heading">Step 1: Upload Bitwarden Export</h2>
+
+    <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="Upload file area. Click to browse or drag and drop a JSON file">
+      <svg class="upload-icon" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+        <polyline points="17 8 12 3 7 8"></polyline>
+        <line x1="12" y1="3" x2="12" y2="15"></line>
+      </svg>
+      <p class="drop-text">Drag & Drop JSON file here</p>
+      <span class="drop-divider">or</span>
+      <input type="file" id="fileInput" accept=".json,application/json" hidden aria-label="File input" />
+      <button id="browseBtn" class="btn btn-secondary" type="button">
+        <span>Select File</span>
+      </button>
+    </div>
+
+    <p id="fileName" class="file-info" role="status" aria-live="polite"></p>
+  </section>
+
+  <!-- STEP 2 -->
+  <section class="card" aria-labelledby="step2-heading">
+    <h2 id="step2-heading">Step 2: Process Data</h2>
+    <p class="step-description">Convert your Bitwarden data to Proton Pass format</p>
+    <button id="processBtn" class="btn btn-primary" disabled type="button" aria-label="Process file">
+      <span class="btn-text">Process File</span>
+      <span class="spinner hidden" aria-hidden="true"></span>
+    </button>
+  </section>
+
+  <!-- RESULTS -->
+  <section class="card hidden" id="results" aria-labelledby="results-heading">
+    <h2 id="results-heading">Results</h2>
+    <div id="stats" class="stats-grid" role="status" aria-live="polite"></div>
+
+    <button id="downloadBtn" class="btn btn-primary btn-large" type="button">
+      <svg class="btn-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+        <polyline points="7 10 12 15 17 10"></polyline>
+        <line x1="12" y1="15" x2="12" y2="3"></line>
+      </svg>
+      <span>Download CSV for Proton Pass</span>
+    </button>
+  </section>
+
+  <!-- CATEGORY REVIEW -->
+  <section class="card hidden" id="categoryReview" aria-labelledby="category-review-heading">
+    <h2 id="category-review-heading">Review & Edit Categories</h2>
+    <p class="step-description">Click on any category to expand and review items. You can change categories before downloading.</p>
+    
+    <div class="category-controls">
+      <input type="text" id="categorySearch" class="search-input" placeholder="Search items..." aria-label="Search items">
+      <button id="addCategoryBtn" class="btn btn-primary" type="button">+ Add Custom Category</button>
+      <button id="manageCategoriesBtn" class="btn btn-secondary" type="button">Manage Categories</button>
+      <button id="expandAllBtn" class="btn btn-secondary" type="button">Expand All</button>
+      <button id="collapseAllBtn" class="btn btn-secondary" type="button">Collapse All</button>
+    </div>
+
+    <div id="categoryAccordion" class="category-accordion"></div>
+  </section>
+
+  <!-- PASSKEY WARNING -->
+  <section class="card hidden warning" id="passkeySection" aria-labelledby="passkey-heading">
+    <h2 id="passkey-heading">Warning: Passkeys Detected</h2>
+    <p>The following items contain passkeys that require manual migration:</p>
+    <ul id="passkeyList" class="passkey-list" role="list"></ul>
+    <details class="help-details">
+      <summary>Why can't passkeys be exported?</summary>
+      <p>Passkeys are cryptographic credentials tied to specific devices and cannot be exported for security reasons. You'll need to re-register them on each website after migrating.</p>
+    </details>
+  </section>
+</div>
+
+<!-- Toast Container -->
+<div id="toastContainer" class="toast-container" role="status" aria-live="polite" aria-atomic="true"></div>
+
+<!-- Loading Overlay -->
+<div id="loadingOverlay" class="loading-overlay hidden" role="alert" aria-live="assertive">
+  <div class="loading-content">
+    <div class="loading-spinner"></div>
+    <p>Processing your data...</p>
+  </div>
+</div>
+
+<!-- Confirmation Dialog -->
+<div id="confirmDialog" class="dialog-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+  <div class="dialog">
+    <h3 id="dialog-title"></h3>
+    <p id="dialog-message"></p>
+    <div class="dialog-actions">
+      <button id="dialogCancel" class="btn btn-secondary" type="button">Cancel</button>
+      <button id="dialogConfirm" class="btn btn-primary" type="button">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
