@@ -2,67 +2,67 @@
 
 The Password Migration Tool automatically categorizes your passwords based on their URLs. Here's what categories are available and some examples:
 
-## 📊 Available Categories
+## Available Categories
 
-### 💰 **Finance**
+### Finance
 Banking, investments, cryptocurrency, payment services
 - **Examples:** Bank of America, Chase, PayPal, Coinbase, Robinhood, Stripe
 
-### 💻 **Tech**
+### Tech
 Developer tools, cloud services, code repositories
 - **Examples:** GitHub, AWS, Google, Microsoft Azure, Docker, npm
 
-### 👥 **Social**
+### Social
 Social media and messaging platforms
 - **Examples:** Facebook, Twitter, LinkedIn, Discord, Slack, Reddit
 
-### 🛒 **Shopping**
+### Shopping
 E-commerce and retail stores
 - **Examples:** Amazon, eBay, Walmart, Target, Etsy, Best Buy
 
-### 🎬 **Entertainment**
+### Entertainment
 Streaming services, gaming platforms, music
 - **Examples:** Netflix, Spotify, Steam, PlayStation, YouTube, Twitch
 
-### 📝 **Productivity**
+### Productivity
 Work tools, file storage, collaboration software
 - **Examples:** Notion, Dropbox, Zoom, Trello, Figma, Adobe
 
-### 📚 **Education**
+### Education
 Learning platforms and educational resources
 - **Examples:** Coursera, Udemy, Khan Academy, Duolingo, Codecademy
 
-### ✈️ **Travel**
+### Travel
 Hotels, airlines, transportation
 - **Examples:** Airbnb, Uber, Delta, Expedia, Booking.com, Lyft
 
-### 🏥 **Health**
+### Health
 Fitness, wellness, medical services
 - **Examples:** MyFitnessPal, Fitbit, CVS, Peloton, Calm, Headspace
 
-### 📰 **News**
+### News
 News sites and information platforms
 - **Examples:** NY Times, WSJ, Medium, TechCrunch, BBC, Reuters
 
-### 🔧 **Utilities**
+### Utilities
 ISPs, phone carriers, delivery services
 - **Examples:** Verizon, AT&T, Comcast, UPS, FedEx, Yelp
 
-### 🏛️ **Government**
+### Government
 Government websites and services
 - **Examples:** IRS, SSA, USPS, DMV, USA.gov
 
-### 📁 **Other**
+### Other
 Anything that doesn't match the above categories
 
-## 🔄 How It Works
+## How It Works
 
 1. The app extracts the domain from your URL (e.g., `chase.com` from `https://www.chase.com/login`)
 2. It checks the domain against a database of known keywords
 3. If a match is found, it assigns that category
 4. If no match, it defaults to "Other"
 
-## ➕ Adding Custom Categories
+## Adding Custom Categories
 
 To add more domains or create custom categories, edit the `CATEGORY_MAPPINGS` object in `app.js`:
 
@@ -77,7 +77,7 @@ const CATEGORY_MAPPINGS = {
 
 The matching is case-insensitive and checks if the domain *contains* any of the keywords.
 
-## 📈 Category Stats
+## Category Stats
 
 After processing, you'll see:
 - A breakdown showing how many items are in each category
@@ -85,4 +85,4 @@ After processing, you'll see:
 - Visual icons for each category
 - Interactive hover effects
 
-Enjoy organized password migration! 🎉
+Enjoy organized password migration!

@@ -353,8 +353,8 @@ class ToastManager {
     const icons = {
       success: '✓',
       error: '✕',
-      warning: '⚠',
-      info: 'ℹ'
+      warning: 'Warning',
+      info: 'Info'
     };
 
     toast.innerHTML = `
