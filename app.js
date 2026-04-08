@@ -1192,6 +1192,11 @@ class UIController {
     // Save scroll position
     const scrollY = window.scrollY;
     
+    // Blur any focused element to prevent auto-scroll-to-focus behavior
+    if (document.activeElement) {
+      document.activeElement.blur();
+    }
+    
     this.state.updateItemCategory(itemIndex, newCategory);
     
     // Only re-render category review, not stats (to prevent scroll jump)
