@@ -1194,9 +1194,8 @@ class UIController {
     
     this.state.updateItemCategory(itemIndex, newCategory);
     
-    // Re-render the category review and stats, preserving expanded state
+    // Only re-render category review, not stats (to prevent scroll jump)
     this.renderCategoryReview(true); // Pass true to preserve expanded categories
-    this.renderStats();
     
     // Restore scroll position after DOM update
     requestAnimationFrame(() => {
