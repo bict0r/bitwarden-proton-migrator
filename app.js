@@ -17,19 +17,19 @@ const CONSTANTS = {
     ENTER: 'Enter'
   },
   CATEGORY_ICONS: {
-    'Finance': '$',
-    'Tech': 'T',
-    'Social': 'S',
-    'Shopping': 'C',
-    'Entertainment': 'E',
-    'Productivity': 'P',
-    'Education': 'A',
-    'Travel': 'V',
-    'Health': 'H',
-    'News': 'N',
-    'Utilities': 'U',
-    'Government': 'G',
-    'Other': '*'
+    'Finance': '',
+    'Tech': '',
+    'Social': '',
+    'Shopping': '',
+    'Entertainment': '',
+    'Productivity': '',
+    'Education': '',
+    'Travel': '',
+    'Health': '',
+    'News': '',
+    'Utilities': '',
+    'Government': '',
+    'Other': ''
   }
 };
 
@@ -901,9 +901,8 @@ class UIController {
       sortedCategories.forEach(([category, count]) => {
         const item = document.createElement('div');
         item.className = 'category-item';
-        const icon = CONSTANTS.CATEGORY_ICONS[category] || '*';
         item.innerHTML = `
-          <span class="category-name">${icon} ${category}</span>
+          <span class="category-name">${category}</span>
           <span class="category-count">${count}</span>
         `;
         categoryList.appendChild(item);
@@ -1053,7 +1052,7 @@ class UIController {
       .sort((a, b) => b[1].length - a[1].length);
 
     sortedCategories.forEach(([category, items]) => {
-      const section = this.createCategorySection(category, items, CONSTANTS.CATEGORY_ICONS[category] || '*', allCategories);
+      const section = this.createCategorySection(category, items, allCategories);
       
       // Restore expanded state if this category was previously expanded
       if (expandedCategories.has(category)) {
@@ -1067,7 +1066,7 @@ class UIController {
   /**
    * Create a category accordion section
    */
-  createCategorySection(category, items, icon, allCategories) {
+  createCategorySection(category, items, allCategories) {
     const section = document.createElement('div');
     section.className = 'category-section';
     section.dataset.category = category;
@@ -1077,7 +1076,6 @@ class UIController {
     header.className = 'category-header';
     header.innerHTML = `
       <div class="category-header-left">
-        <span class="category-icon">${icon}</span>
         <span class="category-title">${category}</span>
         <span class="category-badge">${items.length}</span>
       </div>
