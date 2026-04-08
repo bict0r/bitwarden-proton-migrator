@@ -1189,11 +1189,17 @@ class UIController {
     
     if (oldCategory === newCategory) return;
 
+    // Save scroll position
+    const scrollY = window.scrollY;
+    
     this.state.updateItemCategory(itemIndex, newCategory);
     
     // Re-render the category review and stats, preserving expanded state
     this.renderCategoryReview(true); // Pass true to preserve expanded categories
     this.renderStats();
+    
+    // Restore scroll position
+    window.scrollTo(0, scrollY);
     
     ToastManager.success(`Moved to ${newCategory}`);
   }
