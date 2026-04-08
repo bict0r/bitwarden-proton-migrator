@@ -1198,8 +1198,10 @@ class UIController {
     this.renderCategoryReview(true); // Pass true to preserve expanded categories
     this.renderStats();
     
-    // Restore scroll position
-    window.scrollTo(0, scrollY);
+    // Restore scroll position after DOM update
+    requestAnimationFrame(() => {
+      window.scrollTo(0, scrollY);
+    });
     
     ToastManager.success(`Moved to ${newCategory}`);
   }
