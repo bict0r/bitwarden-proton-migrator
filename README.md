@@ -208,7 +208,7 @@ https://creativecommons.org/licenses/by-nc-sa/4.0/
 
 ---
 
-**Copyright © 2026 LAMA. All Rights Reserved (for commercial use).**
+**Copyright © 2026 bict0r. All Rights Reserved (for commercial use).**
 
 ## 🙏 Acknowledgments
 
@@ -231,5 +231,3 @@ If you encounter any issues or have questions:
 ---
 
 **⚠️ Important Security Note:** Always verify the CSV output before importing into Proton Pass. Keep your Bitwarden export file in a secure location and delete it after successful migration.
-
-**Made with ❤️ for secure password management**

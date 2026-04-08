@@ -31,4 +31,4 @@ node_modules/
 .env.local
 chatpass.code-workspace
 GITHUB_SETUP.md
-GITHUB_SETUP.md
+push-to-github.ps1
