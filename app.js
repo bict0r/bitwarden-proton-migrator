@@ -1021,23 +1021,9 @@ class UIController {
   }
 
   /**
-   * Render category review accordion
+   * Render category review with card grid layout
    */
   renderCategoryReview(preserveExpandedState = false) {
-    // Save which categories are currently expanded
-    const expandedCategories = new Set();
-    if (preserveExpandedState) {
-      const expandedSections = this.elements.categoryAccordion.querySelectorAll('.category-section.expanded');
-      expandedSections.forEach(section => {
-        expandedCategories.add(section.dataset.category);
-      });
-    }
-
-    this.elements.categoryAccordion.innerHTML = '';
-
-    // Get all available categories
-    const allCategories = Object.keys(CONSTANTS.CATEGORY_ICONS);
-    
     // Group items by category
     const itemsByCategory = {};
     this.state.items.forEach((item, index) => {
@@ -1051,69 +1037,92 @@ class UIController {
     const sortedCategories = Object.entries(itemsByCategory)
       .sort((a, b) => b[1].length - a[1].length);
 
+    // Create category grid container if it doesn't exist
+    let categoryGrid = this.elements.categoryAccordion.querySelector('.category-grid');
+    if (!categoryGrid) {
+      categoryGrid = document.createElement('div');
+      categoryGrid.className = 'category-grid';
+      this.elements.categoryAccordion.appendChild(categoryGrid);
+    }
+
+    // Clear and rebuild category filters
+    categoryGrid.innerHTML = '';
+    
+    // Add "All" filter
+    const allFilter = document.createElement('button');
+    allFilter.className = 'category-filter active';
+    allFilter.textContent = 'All';
+    allFilter.addEventListener('click', () => {
+      this.filterByCategory(null);
+    });
+    categoryGrid.appendChild(allFilter);
+
+    // Add individual category filters
     sortedCategories.forEach(([category, items]) => {
-      const section = this.createCategorySection(category, items, allCategories);
-      
-      // Restore expanded state if this category was previously expanded
-      if (expandedCategories.has(category)) {
-        section.classList.add('expanded');
-      }
-      
-      this.elements.categoryAccordion.appendChild(section);
+      const filter = document.createElement('button');
+      filter.className = 'category-filter';
+      filter.textContent = `${category} (${items.length})`;
+      filter.dataset.category = category;
+      filter.addEventListener('click', () => {
+        this.filterByCategory(category);
+      });
+      categoryGrid.appendChild(filter);
+    });
+
+    // Create items grid
+    let itemsGrid = this.elements.categoryAccordion.querySelector('.items-grid');
+    if (!itemsGrid) {
+      itemsGrid = document.createElement('div');
+      itemsGrid.className = 'items-grid';
+      this.elements.categoryAccordion.appendChild(itemsGrid);
+    }
+
+    itemsGrid.innerHTML = '';
+
+    // Render all items as cards
+    this.state.items.forEach((item, index) => {
+      const card = this.createItemCard(item, index);
+      itemsGrid.appendChild(card);
     });
   }
 
   /**
-   * Create a category accordion section
+   * Filter items by category
    */
-  createCategorySection(category, items, allCategories) {
-    const section = document.createElement('div');
-    section.className = 'category-section';
-    section.dataset.category = category;
+  filterByCategory(category) {
+    const cards = this.elements.categoryAccordion.querySelectorAll('.category-item-card');
+    const filters = this.elements.categoryAccordion.querySelectorAll('.category-filter');
 
-    // Header
-    const header = document.createElement('div');
-    header.className = 'category-header';
-    header.innerHTML = `
-      <div class="category-header-left">
-        <span class="category-title">${category}</span>
-        <span class="category-badge">${items.length}</span>
-      </div>
-      <span class="category-chevron">▼</span>
-    `;
-
-    header.addEventListener('click', () => {
-      section.classList.toggle('expanded');
+    // Update active filter
+    filters.forEach(filter => {
+      if (category === null) {
+        filter.classList.toggle('active', filter.textContent.startsWith('All'));
+      } else {
+        filter.classList.toggle('active', filter.dataset.category === category);
+      }
     });
 
-    // Content
-    const content = document.createElement('div');
-    content.className = 'category-content';
-
-    const itemsContainer = document.createElement('div');
-    itemsContainer.className = 'category-items';
-
-    items.forEach(item => {
-      const itemCard = this.createItemCard(item, allCategories);
-      itemsContainer.appendChild(itemCard);
+    // Filter cards
+    cards.forEach(card => {
+      if (category === null) {
+        card.classList.remove('hidden');
+      } else {
+        card.classList.toggle('hidden', card.dataset.category !== category);
+      }
     });
-
-    content.appendChild(itemsContainer);
-    section.appendChild(header);
-    section.appendChild(content);
-
-    return section;
   }
 
   /**
    * Create an item card
    */
-  createItemCard(item, allCategories) {
+  createItemCard(item) {
     const card = document.createElement('div');
     card.className = 'category-item-card';
     card.dataset.itemIndex = item.index;
     card.dataset.itemName = item.name.toLowerCase();
+    card.dataset.category = item.category;
 
+    // Header with name and category select
     const header = document.createElement('div');
     header.className = 'item-header';
 
@@ -1125,6 +1134,8 @@ class UIController {
     categorySelect.className = 'category-select';
     categorySelect.setAttribute('aria-label', `Change category for ${item.name}`);
 
+    // Get all categories
+    const allCategories = Object.keys(CONSTANTS.CATEGORY_ICONS);
     allCategories.forEach(cat => {
       const option = document.createElement('option');
       option.value = cat;
@@ -1137,6 +1148,7 @@ class UIController {
 
     const debouncedChange = Utils.debounce((value) => {
       this.handleCategoryChange(item.index, value);
+      card.dataset.category = value;
     }, 150);
     
     categorySelect.addEventListener('change', (e) => {
@@ -1145,11 +1157,17 @@ class UIController {
 
     header.appendChild(name);
     header.appendChild(categorySelect);
+    card.appendChild(header);
 
-    const url = document.createElement('div');
-    url.className = 'item-url';
-    url.textContent = item.url || '(No URL)';
+    // URL
+    if (item.url) {
+      const url = document.createElement('div');
+      url.className = 'item-url';
+      url.textContent = item.url;
+      card.appendChild(url);
+    }
 
+    // Tags
     const details = document.createElement('div');
     details.className = 'item-details';
 
@@ -1174,9 +1192,9 @@ class UIController {
       details.appendChild(usernameTag);
     }
 
-    card.appendChild(header);
-    card.appendChild(url);
-    card.appendChild(details);
+    if (details.children.length > 0) {
+      card.appendChild(details);
+    }
 
     return card;
   }
