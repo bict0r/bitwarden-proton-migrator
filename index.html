@@ -9,33 +9,49 @@
   <title>Password Migration Tool - Bitwarden to Proton Pass</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>PM</text></svg>">
   <link rel="stylesheet" href="styles.css" />
+  <script src="translations.js"></script>
 </head>
 <body>
 
-<a href="#main-content" class="skip-link">Skip to main content</a>
+<a href="#main-content" class="skip-link" data-i18n="skipToContent">Skip to main content</a>
 
 <div class="container" id="main-content">
   <header>
-    <h1>Password Migration Tool</h1>
-    <p class="subtitle">Convert Bitwarden → Proton Pass safely</p>
-    <p class="privacy-notice">All processing happens locally in your browser - your data never leaves your device</p>
+    <div class="lang-picker-wrap">
+      <label for="langPicker" class="sr-only" data-i18n="langPickerLabel">Select language</label>
+      <svg class="lang-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="2" y1="12" x2="22" y2="12"></line>
+        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+      </svg>
+      <select id="langPicker" class="lang-picker">
+        <option value="en">English</option>
+        <option value="es">Español</option>
+        <option value="fr">Français</option>
+        <option value="de">Deutsch</option>
+        <option value="pt">Português</option>
+      </select>
+    </div>
+    <h1 data-i18n="appTitle">Password Migration Tool</h1>
+    <p class="subtitle" data-i18n="appSubtitle">Convert Bitwarden → Proton Pass safely</p>
+    <p class="privacy-notice" data-i18n="privacyNotice">All processing happens locally in your browser — your data never leaves your device</p>
   </header>
 
   <!-- STEP 1 -->
   <section class="card" aria-labelledby="step1-heading">
-    <h2 id="step1-heading">Step 1: Upload Bitwarden Export</h2>
+    <h2 id="step1-heading" data-i18n="step1Heading">Step 1: Upload Bitwarden Export</h2>
 
-    <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="Upload file area. Click to browse or drag and drop a JSON file">
-      <svg class="upload-icon" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="Upload file area. Click to browse or drag and drop a JSON file" data-i18n-aria-label="dropZoneLabel">
+      <svg class="upload-icon" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
         <polyline points="17 8 12 3 7 8"></polyline>
         <line x1="12" y1="3" x2="12" y2="15"></line>
       </svg>
-      <p class="drop-text">Drag & Drop JSON file here</p>
-      <span class="drop-divider">or</span>
+      <p class="drop-text" data-i18n="dropText">Drag &amp; Drop JSON file here</p>
+      <span class="drop-divider" aria-hidden="true" data-i18n="dropOr">or</span>
       <input type="file" id="fileInput" accept=".json,application/json" hidden aria-label="File input" />
       <button id="browseBtn" class="btn btn-secondary" type="button">
-        <span>Select File</span>
+        <span data-i18n="selectFile">Select File</span>
       </button>
     </div>
 
@@ -44,38 +60,42 @@
 
   <!-- STEP 2 -->
   <section class="card" aria-labelledby="step2-heading">
-    <h2 id="step2-heading">Step 2: Process Data</h2>
-    <p class="step-description">Convert your Bitwarden data to Proton Pass format</p>
-    <button id="processBtn" class="btn btn-primary" disabled type="button" aria-label="Process file">
-      <span class="btn-text">Process File</span>
+    <h2 id="step2-heading" data-i18n="step2Heading">Step 2: Process Data</h2>
+    <p class="step-description" data-i18n="step2Desc">Convert your Bitwarden data to Proton Pass format</p>
+    <button id="processBtn" class="btn btn-primary" disabled type="button" aria-label="Process file" data-i18n-aria-label="processFile">
+      <span class="btn-text" data-i18n="processFile">Process File</span>
       <span class="spinner hidden" aria-hidden="true"></span>
     </button>
   </section>
 
   <!-- RESULTS -->
   <section class="card hidden" id="results" aria-labelledby="results-heading">
-    <h2 id="results-heading">Results</h2>
+    <h2 id="results-heading" data-i18n="resultsHeading">Results</h2>
     <div id="stats" class="stats-grid" role="status" aria-live="polite"></div>
   </section>
 
   <!-- CATEGORY REVIEW -->
   <section class="card hidden" id="categoryReview" aria-labelledby="category-review-heading">
-    <h2 id="category-review-heading">Review & Edit Categories</h2>
-    <p class="step-description">Click on any category to expand and review items. You can change categories before downloading.</p>
-    
+    <h2 id="category-review-heading" data-i18n="categoryReviewHeading">Review &amp; Edit Categories</h2>
+    <p class="step-description" data-i18n="categoryReviewDesc">Click on any category to expand and review items. You can change categories before downloading.</p>
+
     <div class="category-controls">
-      <input type="text" id="categorySearch" class="search-input" placeholder="Search items..." aria-label="Search items">
-      <button id="expandAllBtn" class="btn btn-secondary" type="button">Expand All</button>
-      <button id="collapseAllBtn" class="btn btn-secondary" type="button">Collapse All</button>
+      <input type="text" id="categorySearch" class="search-input"
+        placeholder="Search items..."
+        data-i18n-placeholder="searchPlaceholder"
+        aria-label="Search items"
+        data-i18n-aria-label="searchPlaceholder">
+      <button id="expandAllBtn" class="btn btn-secondary" type="button" data-i18n="expandAll">Expand All</button>
+      <button id="collapseAllBtn" class="btn btn-secondary" type="button" data-i18n="collapseAll">Collapse All</button>
     </div>
 
-    <div id="categoryAccordion" class="category-accordion"></div>
+    <div id="categoryAccordion" class="category-accordion" role="list"></div>
   </section>
 
   <!-- VAULT SETUP -->
   <section class="card hidden" id="vaultSetup" aria-labelledby="vault-setup-heading">
-    <h2 id="vault-setup-heading">Step 3: Configure Vaults</h2>
-    <p class="step-description">Name your vaults below. Each category maps to a vault in Proton Pass. <strong>You must create these vaults in Proton Pass before importing</strong> — items assigned to a vault that doesn't exist yet will be placed in your default vault instead.</p>
+    <h2 id="vault-setup-heading" data-i18n="vaultSetupHeading">Step 3: Configure Vaults</h2>
+    <p class="step-description" data-i18n-html="vaultSetupDesc">Name your vaults below. Each category maps to a vault in Proton Pass. <strong>You must create these vaults in Proton Pass before importing</strong> — items assigned to a vault that doesn't exist yet will be placed in your default vault instead.</p>
 
     <div id="vaultMappingTable" class="vault-mapping-table" role="list" aria-label="Category to vault name mappings"></div>
 
@@ -86,7 +106,7 @@
           <line x1="12" y1="8" x2="12" y2="12"></line>
           <line x1="12" y1="16" x2="12.01" y2="16"></line>
         </svg>
-        <span>Vaults to create in Proton Pass before importing</span>
+        <span data-i18n="vaultSummaryTitle">Vaults to create in Proton Pass before importing</span>
       </div>
       <ul id="vaultList" class="vault-list" role="list"></ul>
     </div>
@@ -94,26 +114,26 @@
 
   <!-- DOWNLOAD -->
   <section class="card hidden" id="downloadSection" aria-labelledby="download-heading">
-    <h2 id="download-heading">Step 4: Download &amp; Import</h2>
-    <p class="step-description">Once you have created your vaults in Proton Pass, download your CSV and import via <strong>Settings &rarr; Import &rarr; Proton Pass (CSV)</strong>.</p>
+    <h2 id="download-heading" data-i18n="downloadHeading">Step 4: Download &amp; Import</h2>
+    <p class="step-description" data-i18n-html="downloadDesc">Once you have created your vaults in Proton Pass, download your CSV and import via <strong>Settings → Import → Proton Pass (CSV)</strong>.</p>
     <button id="downloadBtn" class="btn btn-primary btn-large" type="button">
-      <svg class="btn-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <svg class="btn-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
         <polyline points="7 10 12 15 17 10"></polyline>
         <line x1="12" y1="15" x2="12" y2="3"></line>
       </svg>
-      <span>Download CSV for Proton Pass</span>
+      <span data-i18n="downloadBtn">Download CSV for Proton Pass</span>
     </button>
   </section>
 
   <!-- PASSKEY WARNING -->
   <section class="card hidden warning" id="passkeySection" aria-labelledby="passkey-heading">
-    <h2 id="passkey-heading">Warning: Passkeys Detected</h2>
-    <p>The following items contain passkeys that require manual migration:</p>
+    <h2 id="passkey-heading" data-i18n="passkeyHeading">Warning: Passkeys Detected</h2>
+    <p data-i18n="passkeyDesc">The following items contain passkeys that require manual migration:</p>
     <ul id="passkeyList" class="passkey-list" role="list"></ul>
     <details class="help-details">
-      <summary>Why can't passkeys be exported?</summary>
-      <p>Passkeys are cryptographic credentials tied to specific devices and cannot be exported for security reasons. You'll need to re-register them on each website after migrating.</p>
+      <summary data-i18n="passkeyFaqQuestion">Why can't passkeys be exported?</summary>
+      <p data-i18n="passkeyFaqAnswer">Passkeys are cryptographic credentials tied to specific devices and cannot be exported for security reasons. You'll need to re-register them on each website after migrating.</p>
     </details>
   </section>
 </div>
@@ -125,7 +145,7 @@
 <div id="loadingOverlay" class="loading-overlay hidden" role="alert" aria-live="assertive">
   <div class="loading-content">
     <div class="loading-spinner"></div>
-    <p>Processing your data...</p>
+    <p data-i18n="loadingText">Processing your data...</p>
   </div>
 </div>
 
@@ -135,8 +155,8 @@
     <h3 id="dialog-title"></h3>
     <p id="dialog-message"></p>
     <div class="dialog-actions">
-      <button id="dialogCancel" class="btn btn-secondary" type="button">Cancel</button>
-      <button id="dialogConfirm" class="btn btn-primary" type="button">Confirm</button>
+      <button id="dialogCancel" class="btn btn-secondary" type="button" data-i18n="cancel">Cancel</button>
+      <button id="dialogConfirm" class="btn btn-primary" type="button" data-i18n="confirm">Confirm</button>
     </div>
   </div>
 </div>

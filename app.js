@@ -173,6 +173,99 @@ const CATEGORY_MAPPINGS = {
 };
 
 /* ===================================
+   INTERNATIONALISATION (i18n)
+   =================================== */
+/**
+ * I18n — lightweight internationalisation system.
+ *
+ * Language preference is stored in localStorage and auto-detected from the
+ * browser locale if no preference is saved. Falls back to English for any
+ * unknown language code.
+ *
+ * Usage:
+ *   I18n.t('toastFileLoaded')                → "File loaded successfully!"
+ *   I18n.t('toastProcessed', { count: 42 })  → "Successfully processed 42 items!"
+ *
+ * Dispatches a 'languagechange' CustomEvent on window when the language
+ * switches so UIController can re-render any dynamically built sections.
+ */
+class I18n {
+  static currentLang = 'en';
+  static storageKey = 'preferred_lang';
+
+  /**
+   * Detect and apply the user's preferred language.
+   * Priority: localStorage → browser locale → English.
+   * Called once at DOMContentLoaded before UIController initialises.
+   */
+  static init() {
+    let stored = null;
+    try { stored = localStorage.getItem(this.storageKey); } catch {}
+    const browser = navigator.language?.split('-')[0];
+    const detected = (stored && TRANSLATIONS[stored]) ? stored
+      : (TRANSLATIONS[browser] ? browser : 'en');
+    this.setLanguage(detected, false);
+  }
+
+  /**
+   * Switch to a different language.
+   * @param {string} lang - IETF language code, e.g. 'es'
+   * @param {boolean} [save=true] - persist choice to localStorage
+   */
+  static setLanguage(lang, save = true) {
+    if (!TRANSLATIONS[lang]) lang = 'en';
+    this.currentLang = lang;
+    if (save) {
+      try { localStorage.setItem(this.storageKey, lang); } catch {}
+    }
+    document.documentElement.lang = lang;
+    this.applyTranslations();
+    this.updatePicker();
+    window.dispatchEvent(new CustomEvent('languagechange', { detail: { lang } }));
+  }
+
+  /**
+   * Look up a translated string and replace {variable} placeholders.
+   * Falls back to English, then the raw key if the string is missing.
+   * @param {string} key
+   * @param {object} [vars] - e.g. { count: 5, category: 'Finance' }
+   * @returns {string}
+   */
+  static t(key, vars = {}) {
+    const str = TRANSLATIONS[this.currentLang]?.[key] ?? TRANSLATIONS.en[key] ?? key;
+    return str.replace(/\{(\w+)\}/g, (_, k) => (vars[k] !== undefined ? String(vars[k]) : `{${k}}`));
+  }
+
+  /**
+   * Walk the DOM and update every element with a data-i18n* attribute.
+   *   data-i18n             → element.textContent  (plain text)
+   *   data-i18n-html        → element.innerHTML    (trusted translation HTML only)
+   *   data-i18n-placeholder → input.placeholder
+   *   data-i18n-aria-label  → element aria-label attribute
+   */
+  static applyTranslations() {
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+      el.textContent = this.t(el.dataset.i18n);
+    });
+    document.querySelectorAll('[data-i18n-html]').forEach(el => {
+      el.innerHTML = this.t(el.dataset.i18nHtml);
+    });
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+      el.placeholder = this.t(el.dataset.i18nPlaceholder);
+    });
+    document.querySelectorAll('[data-i18n-aria-label]').forEach(el => {
+      el.setAttribute('aria-label', this.t(el.dataset.i18nAriaLabel));
+    });
+  }
+
+  /** Sync the language picker <select> to the active language. */
+  static updatePicker() {
+    const picker = document.getElementById('langPicker');
+    if (picker) picker.value = this.currentLang;
+  }
+}
+
+/* ===================================
    STATE MANAGEMENT
    =================================== */
 /**
@@ -247,7 +340,7 @@ class AppState {
       localStorage.setItem(CONSTANTS.STORAGE_KEY_COMPLETED, JSON.stringify(this.completed));
     } catch (error) {
       console.error('Failed to save completed passkeys:', error);
-      ToastManager.show('Failed to save progress', 'error');
+      ToastManager.show(I18n.t('toastSaveError'), 'error');
     }
   }
 
@@ -427,16 +520,16 @@ const Utils = {
     const errors = [];
     
     if (!file) {
-      errors.push('No file selected');
+      errors.push(I18n.t('errorNoFile'));
       return errors;
     }
 
     if (file.size > CONSTANTS.MAX_FILE_SIZE) {
-      errors.push(`File too large. Maximum size is ${this.formatFileSize(CONSTANTS.MAX_FILE_SIZE)}`);
+      errors.push(I18n.t('errorFileTooLarge', { size: this.formatFileSize(CONSTANTS.MAX_FILE_SIZE) }));
     }
 
     if (!file.name.endsWith('.json')) {
-      errors.push('File must be a JSON file');
+      errors.push(I18n.t('errorFileType'));
     }
 
     return errors;
@@ -635,14 +728,28 @@ class DialogManager {
         resolve(false);
       };
 
-      const handleEscape = (e) => {
+      const handleKeydown = (e) => {
         if (e.key === CONSTANTS.KEYBOARD_SHORTCUTS.ESCAPE) {
           handleCancel();
+          return;
+        }
+        // Focus trap: keep Tab cycling within the dialog
+        if (e.key === 'Tab') {
+          const focusable = [...this.overlay.querySelectorAll('button:not([disabled])')];
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          if (e.shiftKey && document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+          } else if (!e.shiftKey && document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+          }
         }
       };
 
       const cleanup = () => {
-        document.removeEventListener('keydown', handleEscape);
+        document.removeEventListener('keydown', handleKeydown);
       };
 
       this.confirmBtn.addEventListener('click', () => {
@@ -653,7 +760,7 @@ class DialogManager {
         cleanup();
         handleCancel();
       }, { once: true });
-      document.addEventListener('keydown', handleEscape, { once: true });
+      document.addEventListener('keydown', handleKeydown);
     });
   }
 
@@ -1031,6 +1138,14 @@ class UIController {
       this.filterItems(e.target.value);
     });
 
+    // --- Language picker ---
+    document.getElementById('langPicker')?.addEventListener('change', (e) => {
+      I18n.setLanguage(e.target.value);
+    });
+
+    // --- Language change: re-render any sections that are already visible ---
+    window.addEventListener('languagechange', () => this.onLanguageChange());
+
     // --- Global keyboard shortcuts ---
     document.addEventListener('keydown', (e) => {
       // Ctrl/Cmd + O — open file picker
@@ -1070,17 +1185,17 @@ class UIController {
       try {
         this.state.rawData = JSON.parse(e.target.result);
         this.elements.processBtn.disabled = false;
-        ToastManager.success('File loaded successfully!');
+        ToastManager.success(I18n.t('toastFileLoaded'));
       } catch (error) {
         console.error('JSON parse error:', error);
-        ToastManager.error('Invalid JSON file. Please export from Bitwarden and try again.');
+        ToastManager.error(I18n.t('toastFileInvalid'));
         this.state.rawData = null;
         this.elements.processBtn.disabled = true;
       }
     };
 
     reader.onerror = () => {
-      ToastManager.error('Failed to read file. Please try again.');
+      ToastManager.error(I18n.t('toastFileReadError'));
     };
 
     reader.readAsText(file);
@@ -1095,12 +1210,13 @@ class UIController {
    */
   async processData() {
     if (!this.state.rawData) {
-      ToastManager.error('No data to process');
+      ToastManager.error(I18n.t('toastNoData'));
       return;
     }
 
     this.setProcessingState(true);
     LoadingOverlay.show();
+    document.getElementById('main-content')?.setAttribute('aria-busy', 'true');
 
     // Yield to the browser so the spinner renders before we block the thread
     requestAnimationFrame(() => {
@@ -1122,17 +1238,18 @@ class UIController {
           this.elements.passkeySection.classList.remove('hidden');
         }
 
-        ToastManager.success(`Successfully processed ${this.state.stats.totalItems} items!`);
+        ToastManager.success(I18n.t('toastProcessed', { count: this.state.stats.totalItems }));
         
         // Scroll to results
         this.elements.results.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         
       } catch (error) {
         console.error('Processing error:', error);
-        ToastManager.error(error.message || 'Failed to process data. Please check the file format.');
+        ToastManager.error(error.message || I18n.t('toastProcessError'));
       } finally {
         LoadingOverlay.hide();
         this.setProcessingState(false);
+        document.getElementById('main-content')?.removeAttribute('aria-busy');
       }
     }, 100);
   }
@@ -1148,12 +1265,12 @@ class UIController {
       this.elements.processBtn.classList.add('loading');
       this.elements.processBtn.disabled = true;
       spinner.classList.remove('hidden');
-      btnText.textContent = 'Processing...';
+      btnText.textContent = I18n.t('processing');
     } else {
       this.elements.processBtn.classList.remove('loading');
       this.elements.processBtn.disabled = false;
       spinner.classList.add('hidden');
-      btnText.textContent = 'Process File';
+      btnText.textContent = I18n.t('processFile');
     }
   }
 
@@ -1172,19 +1289,19 @@ class UIController {
     let statsHTML = `
       <div class="stat-item">
         <span class="stat-value">${totalItems}</span>
-        <span class="stat-label">Total Items</span>
+        <span class="stat-label">${I18n.t('statTotalItems')}</span>
       </div>
       <div class="stat-item">
         <span class="stat-value">${withPasswords}</span>
-        <span class="stat-label">With Passwords</span>
+        <span class="stat-label">${I18n.t('statWithPasswords')}</span>
       </div>
       <div class="stat-item">
         <span class="stat-value">${withTOTP}</span>
-        <span class="stat-label">With 2FA</span>
+        <span class="stat-label">${I18n.t('statWith2FA')}</span>
       </div>
       <div class="stat-item">
         <span class="stat-value">${withPasskeys}</span>
-        <span class="stat-label">With Passkeys</span>
+        <span class="stat-label">${I18n.t('statWithPasskeys')}</span>
       </div>
     `;
     
@@ -1194,7 +1311,7 @@ class UIController {
     if (Object.keys(byCategory).length > 0) {
       const categorySection = document.createElement('div');
       categorySection.className = 'category-breakdown';
-      categorySection.innerHTML = '<h3>Categories</h3>';
+      categorySection.innerHTML = `<h3>${I18n.t('categoriesHeading')}</h3>`;
       
       const categoryList = document.createElement('div');
       categoryList.className = 'category-list';
@@ -1245,12 +1362,12 @@ class UIController {
       
       const openBtn = document.createElement('button');
       openBtn.className = 'btn btn-secondary';
-      openBtn.textContent = 'Open Site';
+      openBtn.textContent = I18n.t('openSite');
       openBtn.addEventListener('click', () => this.openPasskeySite(passkey.url));
       
       const doneBtn = document.createElement('button');
       doneBtn.className = 'btn btn-primary';
-      doneBtn.textContent = 'Mark Done';
+      doneBtn.textContent = I18n.t('markDone');
       doneBtn.addEventListener('click', () => this.markPasskeyDone(passkey.name));
       
       li.appendChild(nameSpan);
@@ -1266,15 +1383,15 @@ class UIController {
    */
   async openPasskeySite(url) {
     if (!url) {
-      ToastManager.warning('No URL found for this passkey');
+      ToastManager.warning(I18n.t('toastNoURL'));
       return;
     }
 
     try {
       window.open(url, '_blank', 'noopener,noreferrer');
-      ToastManager.info('Opened in new tab');
+      ToastManager.info(I18n.t('toastOpenedTab'));
     } catch (error) {
-      ToastManager.error('Failed to open URL');
+      ToastManager.error(I18n.t('toastOpenURLError'));
     }
   }
 
@@ -1283,14 +1400,14 @@ class UIController {
    */
   async markPasskeyDone(name) {
     const confirmed = await DialogManager.show(
-      'Confirm Completion',
-      `Have you successfully re-registered the passkey for "${name}"?`
+      I18n.t('dialogPasskeyTitle'),
+      I18n.t('dialogPasskeyMessage', { name })
     );
 
     if (confirmed) {
       this.state.markPasskeyComplete(name);
       this.renderPasskeys();
-      ToastManager.success('Passkey marked as complete');
+      ToastManager.success(I18n.t('toastPasskeyDone'));
     }
   }
 
@@ -1312,11 +1429,11 @@ class UIController {
             class="vault-name-input"
             data-category="${Utils.sanitizeText(category)}"
             value="${Utils.sanitizeText(vaultName)}"
-            placeholder="Vault name"
-            aria-label="Vault name for ${Utils.sanitizeText(category)} category"
+            placeholder="${I18n.t('vaultNamePlaceholder')}"
+            aria-label="${I18n.t('vaultNamePlaceholder')} — ${Utils.sanitizeText(category)}"
             maxlength="50"
           >
-          <span class="vault-item-count">${count} item${count !== 1 ? 's' : ''}</span>
+          <span class="vault-item-count">${I18n.t(count !== 1 ? 'vaultItemCountPlural' : 'vaultItemCount', { count })}</span>
         </div>`;
     }).join('');
 
@@ -1337,11 +1454,11 @@ class UIController {
     const vaults = this.state.getUniqueVaults();
     this.elements.vaultList.innerHTML = vaults.map(v => {
       const mergeNote = v.categories.length > 1
-        ? `<span class="vault-merge-note">merges: ${v.categories.map(c => Utils.sanitizeText(c)).join(', ')}</span>`
+        ? `<span class="vault-merge-note">${I18n.t('vaultMergesPrefix')} ${v.categories.map(c => Utils.sanitizeText(c)).join(', ')}</span>`
         : '';
       return `<li class="vault-list-item">
         <span class="vault-list-name">${Utils.sanitizeText(v.name)}</span>
-        <span class="vault-list-count">${v.count} item${v.count !== 1 ? 's' : ''}</span>
+        <span class="vault-list-count">${I18n.t(v.count !== 1 ? 'vaultItemCountPlural' : 'vaultItemCount', { count: v.count })}</span>
         ${mergeNote}
       </li>`;
     }).join('');
@@ -1359,7 +1476,7 @@ class UIController {
    */
   downloadCSV() {
     if (!this.state.processedCSV) {
-      ToastManager.error('No data to download');
+      ToastManager.error(I18n.t('toastNoDownload'));
       return;
     }
 
@@ -1382,10 +1499,10 @@ class UIController {
       
       URL.revokeObjectURL(url);
       
-      ToastManager.success('CSV file downloaded successfully!');
+      ToastManager.success(I18n.t('toastDownloaded'));
     } catch (error) {
       console.error('Download error:', error);
-      ToastManager.error('Failed to download file');
+      ToastManager.error(I18n.t('toastDownloadError'));
     }
   }
 
@@ -1435,7 +1552,8 @@ class UIController {
     const allFilter = document.createElement('button');
     allFilter.type = 'button';
     allFilter.className = 'category-filter active';
-    allFilter.textContent = 'All';
+    allFilter.textContent = I18n.t('allFilter');
+    allFilter.setAttribute('aria-pressed', 'true');
     allFilter.addEventListener('click', () => this.filterByCategory(null));
     categoryGrid.appendChild(allFilter);
 
@@ -1445,6 +1563,7 @@ class UIController {
       filter.className = 'category-filter';
       filter.textContent = `${category} (${items.length})`;
       filter.dataset.category = category;
+      filter.setAttribute('aria-pressed', 'false');
       filter.addEventListener('click', () => this.filterByCategory(category));
       categoryGrid.appendChild(filter);
     });
@@ -1489,9 +1608,32 @@ class UIController {
 
       header.appendChild(headerLeft);
       header.appendChild(chevron);
+
+      // Toggle expand/collapse on click
       header.addEventListener('click', () => {
         const expanded = section.classList.toggle('expanded');
         header.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      });
+
+      // Keyboard navigation: arrow keys move focus between accordion headers
+      header.addEventListener('keydown', (e) => {
+        const headers = [
+          ...this.elements.categoryAccordion.querySelectorAll('.category-section:not(.hidden) .category-header')
+        ];
+        const idx = headers.indexOf(e.currentTarget);
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          headers[(idx + 1) % headers.length]?.focus();
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          headers[(idx - 1 + headers.length) % headers.length]?.focus();
+        } else if (e.key === 'Home') {
+          e.preventDefault();
+          headers[0]?.focus();
+        } else if (e.key === 'End') {
+          e.preventDefault();
+          headers[headers.length - 1]?.focus();
+        }
       });
 
       // Content
@@ -1524,9 +1666,9 @@ class UIController {
     const sections = this.elements.categoryAccordion.querySelectorAll('.category-section');
 
     filters.forEach(filter => {
-      filter.classList.toggle('active',
-        category === null ? !filter.dataset.category : filter.dataset.category === category
-      );
+      const isActive = category === null ? !filter.dataset.category : filter.dataset.category === category;
+      filter.classList.toggle('active', isActive);
+      filter.setAttribute('aria-pressed', isActive ? 'true' : 'false');
     });
 
     sections.forEach(section => {
@@ -1620,26 +1762,26 @@ class UIController {
     if (item.hasPassword) {
       const passwordTag = document.createElement('span');
       passwordTag.className = 'item-tag has-password';
-      passwordTag.textContent = 'Password';
+      passwordTag.textContent = I18n.t('tagPassword');
       details.appendChild(passwordTag);
     }
 
     if (item.hasTotp) {
       const totpTag = document.createElement('span');
       totpTag.className = 'item-tag has-totp';
-      totpTag.textContent = '2FA';
+      totpTag.textContent = I18n.t('tag2FA');
       details.appendChild(totpTag);
     }
 
     if (item.email) {
       const emailTag = document.createElement('span');
       emailTag.className = 'item-tag';
-      emailTag.textContent = `Email: ${item.email}`;
+      emailTag.textContent = I18n.t('tagEmail', { value: item.email });
       details.appendChild(emailTag);
     } else if (item.username) {
       const usernameTag = document.createElement('span');
       usernameTag.className = 'item-tag';
-      usernameTag.textContent = `User: ${item.username}`;
+      usernameTag.textContent = I18n.t('tagUser', { value: item.username });
       details.appendChild(usernameTag);
     }
 
@@ -1686,7 +1828,7 @@ class UIController {
       window.scrollTo(0, scrollY);
     });
     
-    ToastManager.success(`Moved to ${newCategory}`);
+    ToastManager.success(I18n.t('toastMovedTo', { category: newCategory }));
   }
 
   /**
@@ -1707,6 +1849,26 @@ class UIController {
       section.classList.remove('expanded');
       section.querySelector('.category-header')?.setAttribute('aria-expanded', 'false');
     });
+  }
+
+  /**
+   * Re-render all visible dynamic sections after a language change.
+   * Static elements are already handled by I18n.applyTranslations().
+   * This covers sections whose content is built entirely in JavaScript.
+   */
+  onLanguageChange() {
+    if (!this.elements.results.classList.contains('hidden')) {
+      this.renderStats();
+    }
+    if (!this.elements.categoryReview.classList.contains('hidden')) {
+      this.renderCategoryReview(true);
+    }
+    if (!this.elements.vaultSetup.classList.contains('hidden')) {
+      this.renderVaultSetup();
+    }
+    if (!this.elements.passkeySection.classList.contains('hidden')) {
+      this.renderPasskeys();
+    }
   }
 
   /**
@@ -1761,10 +1923,13 @@ class UIController {
  * is nothing else to do here except show a welcome toast.
  */
 document.addEventListener('DOMContentLoaded', () => {
+  // Detect and apply language before any rendering happens
+  I18n.init();
+
   const appState = new AppState();
   const uiController = new UIController(appState); // eslint-disable-line no-unused-vars
 
-  ToastManager.info('Ready to migrate your passwords securely');
+  ToastManager.info(I18n.t('toastReady'));
 
   console.log('Password Migration Tool initialized');
   console.log('All processing happens locally — your data never leaves your device');
