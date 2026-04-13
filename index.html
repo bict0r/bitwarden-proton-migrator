@@ -56,15 +56,6 @@
   <section class="card hidden" id="results" aria-labelledby="results-heading">
     <h2 id="results-heading">Results</h2>
     <div id="stats" class="stats-grid" role="status" aria-live="polite"></div>
-
-    <button id="downloadBtn" class="btn btn-primary btn-large" type="button">
-      <svg class="btn-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-        <polyline points="7 10 12 15 17 10"></polyline>
-        <line x1="12" y1="15" x2="12" y2="3"></line>
-      </svg>
-      <span>Download CSV for Proton Pass</span>
-    </button>
   </section>
 
   <!-- CATEGORY REVIEW -->
@@ -74,13 +65,45 @@
     
     <div class="category-controls">
       <input type="text" id="categorySearch" class="search-input" placeholder="Search items..." aria-label="Search items">
-      <button id="addCategoryBtn" class="btn btn-primary" type="button">+ Add Custom Category</button>
-      <button id="manageCategoriesBtn" class="btn btn-secondary" type="button">Manage Categories</button>
       <button id="expandAllBtn" class="btn btn-secondary" type="button">Expand All</button>
       <button id="collapseAllBtn" class="btn btn-secondary" type="button">Collapse All</button>
     </div>
 
     <div id="categoryAccordion" class="category-accordion"></div>
+  </section>
+
+  <!-- VAULT SETUP -->
+  <section class="card hidden" id="vaultSetup" aria-labelledby="vault-setup-heading">
+    <h2 id="vault-setup-heading">Step 3: Configure Vaults</h2>
+    <p class="step-description">Name your vaults below. Each category maps to a vault in Proton Pass. <strong>You must create these vaults in Proton Pass before importing</strong> — items assigned to a vault that doesn't exist yet will be placed in your default vault instead.</p>
+
+    <div id="vaultMappingTable" class="vault-mapping-table" role="list" aria-label="Category to vault name mappings"></div>
+
+    <div class="vault-summary" aria-live="polite">
+      <div class="vault-summary-header">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="8" x2="12" y2="12"></line>
+          <line x1="12" y1="16" x2="12.01" y2="16"></line>
+        </svg>
+        <span>Vaults to create in Proton Pass before importing</span>
+      </div>
+      <ul id="vaultList" class="vault-list" role="list"></ul>
+    </div>
+  </section>
+
+  <!-- DOWNLOAD -->
+  <section class="card hidden" id="downloadSection" aria-labelledby="download-heading">
+    <h2 id="download-heading">Step 4: Download &amp; Import</h2>
+    <p class="step-description">Once you have created your vaults in Proton Pass, download your CSV and import via <strong>Settings &rarr; Import &rarr; Proton Pass (CSV)</strong>.</p>
+    <button id="downloadBtn" class="btn btn-primary btn-large" type="button">
+      <svg class="btn-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+        <polyline points="7 10 12 15 17 10"></polyline>
+        <line x1="12" y1="15" x2="12" y2="3"></line>
+      </svg>
+      <span>Download CSV for Proton Pass</span>
+    </button>
   </section>
 
   <!-- PASSKEY WARNING -->

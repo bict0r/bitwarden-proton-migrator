@@ -1,6 +1,20 @@
 /**
  * Password Migration Tool - Bitwarden to Proton Pass
- * All processing happens client-side for maximum security
+ *
+ * Converts a Bitwarden JSON export into a Proton Pass–compatible CSV file.
+ * Everything runs entirely in the browser — no data is ever sent to a server.
+ *
+ * Architecture overview:
+ *   CONSTANTS         — immutable config values (file limits, CSV header, shortcuts)
+ *   CATEGORY_MAPPINGS — domain-keyword → category lookup table
+ *   AppState          — single source of truth for all runtime data
+ *   Utils             — pure helper functions (sanitize, CSV escape, email detect, etc.)
+ *   ToastManager      — non-blocking notification banners
+ *   DialogManager     — promise-based confirmation dialogs
+ *   LoadingOverlay    — full-screen processing indicator
+ *   DataProcessor     — parses Bitwarden JSON → builds CSV rows + stats
+ *   UIController      — all DOM rendering and event wiring
+ *
  * @version 2.0.0
  */
 
@@ -8,14 +22,31 @@
    CONSTANTS
    =================================== */
 const CONSTANTS = {
-  MAX_FILE_SIZE: 50 * 1024 * 1024, // 50MB
+  /** Maximum accepted file size (50 MB). Bitwarden exports are typically <5 MB. */
+  MAX_FILE_SIZE: 50 * 1024 * 1024,
+
+  /** localStorage key used to persist which passkeys the user has already re-registered. */
   STORAGE_KEY_COMPLETED: 'completed_passkeys',
+
+  /**
+   * Column order required by the Proton Pass CSV importer.
+   * All rows must follow this exact order.
+   */
   CSV_HEADER: 'type,name,url,email,username,password,note,totp,createTime,modifyTime,vault',
+
+  /** How long (ms) success/warning toasts stay on screen before auto-dismissing. */
   TOAST_DURATION: 5000,
+
+  /** Key names used in keydown handlers so string literals are not scattered throughout. */
   KEYBOARD_SHORTCUTS: {
     ESCAPE: 'Escape',
     ENTER: 'Enter'
   },
+
+  /**
+   * Display icons for each recognised category.
+   * Keys must match the keys in CATEGORY_MAPPINGS plus 'Other'.
+   */
   CATEGORY_ICONS: {
     'Finance': '',
     'Tech': '',
@@ -36,6 +67,14 @@ const CONSTANTS = {
 /* ===================================
    CATEGORY MAPPING
    =================================== */
+/**
+ * Maps category names to an array of domain keywords.
+ * During processing, Utils.categorizeUrl() checks whether the item's domain
+ * contains any of these keywords (case-insensitive substring match).
+ * The first matching category wins; items that match nothing fall back to "Other".
+ *
+ * To add a new category: add a key here AND add the same key to CONSTANTS.CATEGORY_ICONS.
+ */
 const CATEGORY_MAPPINGS = {
   // Finance & Banking
   'Finance': [
@@ -136,22 +175,60 @@ const CATEGORY_MAPPINGS = {
 /* ===================================
    STATE MANAGEMENT
    =================================== */
+/**
+ * AppState — single source of truth for the entire application.
+ *
+ * One instance is created on DOMContentLoaded and passed into UIController.
+ * All mutation of application data goes through AppState methods so that the
+ * UI layer never touches raw data structures directly.
+ */
 class AppState {
   constructor() {
+    /** Raw parsed JSON from the uploaded Bitwarden export file. */
     this.rawData = null;
+
+    /** The generated CSV string, ready to write to a .csv file. */
     this.processedCSV = '';
+
+    /** Array of passkey objects detected during processing. */
     this.passkeys = [];
+
+    /** Names of passkeys the user has already manually re-registered (persisted via localStorage). */
     this.completed = this.loadCompletedPasskeys();
-    this.items = []; // Store processed items for category editing
+
+    /**
+     * Flat array of every processed login item.
+     * Each entry mirrors one CSV row and is used by UIController for the
+     * category review accordion and for regenerating the CSV after edits.
+     */
+    this.items = [];
+
+    /**
+     * Maps category name → vault name for the Proton Pass import.
+     * Initialised by initVaultMappings() after processing. The user can
+     * rename vaults in the Step 3 UI, which calls updateVaultMapping().
+     * Multiple categories can share the same vault name — they will be merged.
+     *
+     * @type {{ [category: string]: string }}
+     */
+    this.vaultMappings = {};
+
+    /** Running counters updated during DataProcessor.process(). */
     this.stats = {
       totalItems: 0,
       withPasswords: 0,
       withPasskeys: 0,
       withTOTP: 0,
-      byCategory: {} // Track items per category
+      /** { [category: string]: number } — item count per category. */
+      byCategory: {}
     };
   }
 
+  /**
+   * Load previously saved passkey completion state from localStorage.
+   * Returns an empty array if nothing is stored or the stored value is corrupt.
+   * @returns {string[]} Array of passkey names the user has already completed.
+   */
   loadCompletedPasskeys() {
     try {
       return JSON.parse(localStorage.getItem(CONSTANTS.STORAGE_KEY_COMPLETED) || '[]');
@@ -161,6 +238,10 @@ class AppState {
     }
   }
 
+  /**
+   * Persist the current completed passkeys list to localStorage.
+   * Called automatically by markPasskeyComplete().
+   */
   saveCompletedPasskeys() {
     try {
       localStorage.setItem(CONSTANTS.STORAGE_KEY_COMPLETED, JSON.stringify(this.completed));
@@ -170,6 +251,11 @@ class AppState {
     }
   }
 
+  /**
+   * Mark a passkey as manually re-registered by the user.
+   * Idempotent — calling it twice for the same name has no effect.
+   * @param {string} name — the passkey's display name (matches item.name in Bitwarden)
+   */
   markPasskeyComplete(name) {
     if (!this.completed.includes(name)) {
       this.completed.push(name);
@@ -177,11 +263,59 @@ class AppState {
     }
   }
 
+  /**
+   * Seed vaultMappings with a 1-to-1 category → vault name default.
+   * Called once after DataProcessor.process() so that every discovered
+   * category has an entry. The user can then rename vaults via the Step 3 UI.
+   */
+  initVaultMappings() {
+    this.vaultMappings = {};
+    Object.keys(this.stats.byCategory).forEach(category => {
+      this.vaultMappings[category] = category;
+    });
+  }
+
+  /**
+   * Update the vault name for a single category.
+   * Called live as the user types in the Step 3 vault name inputs.
+   * @param {string} category — category key (e.g. "Finance")
+   * @param {string} vaultName — desired vault name in Proton Pass
+   */
+  updateVaultMapping(category, vaultName) {
+    this.vaultMappings[category] = vaultName;
+  }
+
+  /**
+   * Collapse vaultMappings into a deduplicated list of unique vault names.
+   * If two categories share the same vault name they are merged into one entry.
+   * Sorted by item count (descending) for display in the summary box.
+   *
+   * @returns {{ name: string, categories: string[], count: number }[]}
+   */
+  getUniqueVaults() {
+    const vaults = {};
+    Object.entries(this.vaultMappings).forEach(([category, vaultName]) => {
+      // Fall back to the category name if the user left the input blank
+      const name = (vaultName || '').trim() || category;
+      if (!vaults[name]) {
+        vaults[name] = { name, categories: [], count: 0 };
+      }
+      vaults[name].categories.push(category);
+      vaults[name].count += this.stats.byCategory[category] || 0;
+    });
+    return Object.values(vaults).sort((a, b) => b.count - a.count);
+  }
+
+  /**
+   * Reset all state back to initial values.
+   * Called when the user uploads a new file so stale data cannot bleed through.
+   */
   reset() {
     this.rawData = null;
     this.processedCSV = '';
     this.passkeys = [];
     this.items = [];
+    this.vaultMappings = {};
     this.stats = {
       totalItems: 0,
       withPasswords: 0,
@@ -191,12 +325,18 @@ class AppState {
     };
   }
 
+  /**
+   * Move an item to a new category and keep stats consistent.
+   * @param {number} itemIndex — index into this.items[]
+   * @param {string} newCategory — target category name
+   */
   updateItemCategory(itemIndex, newCategory) {
     if (this.items[itemIndex]) {
       const oldCategory = this.items[itemIndex].category;
       this.items[itemIndex].category = newCategory;
-      
-      // Update stats
+
+      // Decrement old category; remove the key entirely if it hits zero
+      // so the category disappears from the vault setup and results sections
       this.stats.byCategory[oldCategory]--;
       if (this.stats.byCategory[oldCategory] === 0) {
         delete this.stats.byCategory[oldCategory];
@@ -205,27 +345,33 @@ class AppState {
     }
   }
 
+  /**
+   * Rebuild processedCSV from the current items[] and vaultMappings.
+   * Must be called before downloadCSV() to pick up any category or vault changes
+   * the user made after the initial process() run.
+   */
   regenerateCSV() {
     const rows = [CONSTANTS.CSV_HEADER];
-    
+
     this.items.forEach(item => {
       const row = [
         'login',
         item.name || '',
         item.url || '',
-        item.username || '',
-        item.username || '',
+        item.email || '',          // email column — only populated when identifier is an email address
+        item.username || '',       // username column — only populated when identifier is NOT an email
         item.password || '',
         item.note || '',
         item.totp || '',
         item.creationDate || '',
         item.revisionDate || '',
-        item.category || 'Other'
+        // Use mapped vault name; fall back to category name if user left it blank
+        (this.vaultMappings[item.category] || '').trim() || item.category || 'Other'
       ].map(field => Utils.escapeCSV(field)).join(',');
-      
+
       rows.push(row);
     });
-    
+
     this.processedCSV = rows.join('\n');
   }
 }
@@ -233,9 +379,16 @@ class AppState {
 /* ===================================
    UTILITY FUNCTIONS
    =================================== */
+/**
+ * Utils — stateless helper functions.
+ * Pure functions with no side effects; safe to call from anywhere.
+ */
 const Utils = {
   /**
-   * Sanitize text for safe display (prevent XSS)
+   * Sanitize text for safe HTML display (prevents XSS).
+   * Uses the browser's own text node escaping — no regex required.
+   * @param {string} text
+   * @returns {string} HTML-escaped string
    */
   sanitizeText(text) {
     const div = document.createElement('div');
@@ -290,6 +443,23 @@ const Utils = {
   },
 
   /**
+   * Heuristic check: returns true if the string looks like an email address.
+   *
+   * Used to decide whether to populate the CSV `email` column or the `username`
+   * column. Bitwarden stores both emails and plain usernames in the same
+   * `login.username` field, so we detect the type here and route accordingly.
+   *
+   * This is intentionally simple (requires @, a domain, and a TLD). It covers
+   * the real-world cases in a password export without false positives.
+   *
+   * @param {string} str
+   * @returns {boolean}
+   */
+  isEmail(str) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(str);
+  },
+
+  /**
    * Debounce function calls
    */
   debounce(func, wait) {
@@ -305,7 +475,10 @@ const Utils = {
   },
 
   /**
-   * Extract domain from URL
+   * Extract the bare domain (no www, no path) from a URL string.
+   * Falls back to an empty string for invalid or empty inputs.
+   * @param {string} url
+   * @returns {string} e.g. "github.com"
    */
   extractDomain(url) {
     if (!url) return '';
@@ -318,15 +491,21 @@ const Utils = {
   },
 
   /**
-   * Categorize URL based on domain
+   * Assign a category to a URL by matching its domain against CATEGORY_MAPPINGS.
+   *
+   * Strategy: extract the domain, then iterate categories in object-insertion order
+   * (Finance first, Government last). The first category whose keyword list contains
+   * the domain as a substring wins. Returns "Other" for unrecognised domains.
+   *
+   * @param {string} url — full URL from the Bitwarden export
+   * @returns {string} category name, e.g. "Finance" or "Other"
    */
   categorizeUrl(url) {
     if (!url) return 'Other';
-    
+
     const domain = this.extractDomain(url);
     if (!domain) return 'Other';
-    
-    // Check each category
+
     for (const [category, keywords] of Object.entries(CATEGORY_MAPPINGS)) {
       for (const keyword of keywords) {
         if (domain.includes(keyword)) {
@@ -334,7 +513,7 @@ const Utils = {
         }
       }
     }
-    
+
     return 'Other';
   }
 };
@@ -342,9 +521,24 @@ const Utils = {
 /* ===================================
    TOAST NOTIFICATION SYSTEM
    =================================== */
+/**
+ * ToastManager — lightweight, non-blocking notification banners.
+ *
+ * All methods are static; no instance is needed.
+ * Toasts slide in from the right and auto-dismiss after TOAST_DURATION ms.
+ * Error toasts never auto-dismiss — the user must close them manually,
+ * because errors require deliberate acknowledgement.
+ */
 class ToastManager {
   static container = document.getElementById('toastContainer');
 
+  /**
+   * Create and display a toast notification.
+   * @param {string} message — human-readable message
+   * @param {'info'|'success'|'warning'|'error'} type — controls colour and icon
+   * @param {number} duration — ms before auto-dismiss; 0 = never
+   * @returns {HTMLElement} the toast element (rarely needed by callers)
+   */
   static show(message, type = 'info', duration = CONSTANTS.TOAST_DURATION) {
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
@@ -404,6 +598,17 @@ class ToastManager {
 /* ===================================
    DIALOG MANAGER
    =================================== */
+/**
+ * DialogManager — promise-based confirmation dialogs.
+ *
+ * Usage:
+ *   const confirmed = await DialogManager.show('Title', 'Are you sure?');
+ *   if (confirmed) { ... }
+ *
+ * The overlay is a single shared element in index.html (#confirmDialog).
+ * Event listeners use { once: true } so they clean up after every show() call.
+ * Pressing Escape is equivalent to clicking Cancel.
+ */
 class DialogManager {
   static overlay = document.getElementById('confirmDialog');
   static title = document.getElementById('dialog-title');
@@ -460,13 +665,22 @@ class DialogManager {
 /* ===================================
    LOADING OVERLAY
    =================================== */
+/**
+ * LoadingOverlay — full-screen spinner shown during the processing step.
+ *
+ * Processing is synchronous-heavy (JSON parse + CSV build for hundreds of items),
+ * so the overlay gives the user feedback that the app hasn't frozen.
+ * It is always shown before requestAnimationFrame() and hidden in the finally block.
+ */
 class LoadingOverlay {
   static overlay = document.getElementById('loadingOverlay');
 
+  /** Show the full-screen loading spinner. */
   static show() {
     this.overlay.classList.remove('hidden');
   }
 
+  /** Hide the full-screen loading spinner. */
   static hide() {
     this.overlay.classList.add('hidden');
   }
@@ -475,9 +689,36 @@ class LoadingOverlay {
 /* ===================================
    DATA PROCESSING
    =================================== */
+/**
+ * DataProcessor — all logic for parsing a Bitwarden JSON export.
+ *
+ * All methods are static. This class has no state of its own;
+ * results are written into the AppState object passed to process().
+ *
+ * Bitwarden export structure (relevant fields):
+ *   {
+ *     items: [{
+ *       name, notes, creationDate, revisionDate,
+ *       fields: [{ name, value }],
+ *       passwordHistory: [{ password, lastUsedDate }],
+ *       login: {
+ *         username,   ← may be an email or a plain username
+ *         password,
+ *         totp,
+ *         uris: [{ uri, match }],
+ *         fido2Credentials: [...]  ← passkeys
+ *       }
+ *     }]
+ *   }
+ */
 class DataProcessor {
   /**
-   * Extract URLs from Bitwarden URI array
+   * Extract URLs from a Bitwarden URI array.
+   * The first http/https URI becomes the "main" URL (used for categorisation
+   * and the CSV url column). Remaining URIs are moved to the notes field.
+   *
+   * @param {{ uri: string }[]} uris
+   * @returns {{ main: string, others: string[] }}
    */
   static extractUrls(uris = []) {
     let main = '';
@@ -497,7 +738,16 @@ class DataProcessor {
   }
 
   /**
-   * Build comprehensive notes section
+   * Build the full notes string for a login item.
+   *
+   * Proton Pass has a single "note" field per item, so everything that doesn't
+   * have a dedicated CSV column is concatenated here in clearly labelled sections:
+   * original notes → custom fields → password history → TOTP → extra URLs →
+   * passkey metadata → item timestamps.
+   *
+   * @param {object} item — raw Bitwarden item object
+   * @param {string[]} extraUrls — additional URLs beyond the primary one
+   * @returns {string} multi-line notes string
    */
   static buildNotes(item, extraUrls) {
     const sections = [];
@@ -550,7 +800,22 @@ Updated: ${item.revisionDate}`);
   }
 
   /**
-   * Process Bitwarden data to Proton Pass CSV format
+   * Parse a Bitwarden JSON export and populate AppState with processed data.
+   *
+   * For each login item this method:
+   *   1. Extracts the primary URL and classifies it into a category
+   *   2. Detects passkeys (stored separately — they can't be migrated via CSV)
+   *   3. Separates email vs plain username so each goes in the correct CSV column
+   *   4. Builds a composite notes field for data that has no dedicated CSV column
+   *   5. Writes a CSV row and pushes a structured item object for the review UI
+   *
+   * Note: only items of type "login" are present in a Bitwarden vault export.
+   * Secure notes, cards, and identities are not included in the standard JSON export.
+   *
+   * @param {object} rawData — parsed Bitwarden JSON
+   * @param {AppState} state — state object to populate (mutated in place)
+   * @returns {AppState} the same state object, for chaining if needed
+   * @throws {Error} if rawData.items is missing or not an array
    */
   static process(rawData, state) {
     state.passkeys = [];
@@ -600,11 +865,18 @@ Updated: ${item.revisionDate}`);
 
       const note = this.buildNotes(item, others);
 
+      // Separate email vs username: if the value looks like an email put it in
+      // the email column only; otherwise put it in username only.
+      const rawIdentifier = login.username || '';
+      const emailField    = Utils.isEmail(rawIdentifier) ? rawIdentifier : '';
+      const usernameField = Utils.isEmail(rawIdentifier) ? '' : rawIdentifier;
+
       // Store item data for category review
       state.items.push({
         name: item.name || '',
         url: main || '',
-        username: login.username || '',
+        email: emailField,
+        username: usernameField,
         password: login.password || '',
         note: note,
         totp: login.totp || '',
@@ -615,19 +887,19 @@ Updated: ${item.revisionDate}`);
         hasTotp: !!login.totp
       });
 
-      // Build CSV row with proper escaping - use category instead of hardcoded 'Personal'
+      // Build CSV row with proper escaping
       const row = [
         'login',
         item.name || '',
         main || '',
-        login.username || '', // email field
-        login.username || '',
+        emailField,
+        usernameField,
         login.password || '',
         note,
         login.totp || '',
         item.creationDate || '',
         item.revisionDate || '',
-        category // Dynamic category
+        category
       ].map(field => Utils.escapeCSV(field)).join(',');
 
       rows.push(row);
@@ -641,9 +913,33 @@ Updated: ${item.revisionDate}`);
 /* ===================================
    UI CONTROLLER
    =================================== */
+/**
+ * UIController — owns all DOM rendering and user interaction.
+ *
+ * Receives an AppState instance and keeps a reference to every relevant
+ * DOM element in this.elements so that querySelector is only called once
+ * per element at startup, not on every render.
+ *
+ * Responsibilities:
+ *   - File upload (drag-and-drop, browse button, FileReader)
+ *   - Triggering DataProcessor and rendering the result sections
+ *   - Category review accordion (render, filter, expand/collapse, search)
+ *   - Vault mapping UI (Step 3) — input rows + live summary
+ *   - CSV download (regenerate → Blob → anchor click)
+ *   - Passkey list with "Mark Done" tracking
+ *   - Global keyboard shortcuts
+ */
 class UIController {
+  /**
+   * @param {AppState} state
+   */
   constructor(state) {
     this.state = state;
+
+    /**
+     * Cached references to all DOM elements this controller interacts with.
+     * Populated once at construction time to avoid repeated getElementById calls.
+     */
     this.elements = {
       dropZone: document.getElementById('dropZone'),
       fileInput: document.getElementById('fileInput'),
@@ -659,19 +955,26 @@ class UIController {
       categoryAccordion: document.getElementById('categoryAccordion'),
       categorySearch: document.getElementById('categorySearch'),
       expandAllBtn: document.getElementById('expandAllBtn'),
-      collapseAllBtn: document.getElementById('collapseAllBtn')
+      collapseAllBtn: document.getElementById('collapseAllBtn'),
+      vaultSetup: document.getElementById('vaultSetup'),
+      vaultMappingTable: document.getElementById('vaultMappingTable'),
+      vaultList: document.getElementById('vaultList'),
+      downloadSection: document.getElementById('downloadSection')
     };
 
     this.initializeEventListeners();
   }
 
   /**
-   * Initialize all event listeners
+   * Wire up all event listeners for the application.
+   * Called once from the constructor. Grouped by feature area.
    */
   initializeEventListeners() {
-    // File input
+    // --- File selection ---
+    // "Select File" button: stop propagation so the click doesn't also
+    // bubble up to the dropZone's own click handler below.
     this.elements.browseBtn.addEventListener('click', (e) => {
-      e.stopPropagation(); // Prevent event bubbling to dropZone
+      e.stopPropagation();
       this.elements.fileInput.click();
     });
 
@@ -681,9 +984,9 @@ class UIController {
       }
     });
 
-    // Drag and drop
+    // --- Drag and drop ---
+    // Click on the drop zone area (but not the button, which has its own listener)
     this.elements.dropZone.addEventListener('click', (e) => {
-      // Only trigger if clicking the drop zone itself, not child elements
       if (e.target === this.elements.dropZone || e.target.classList.contains('drop-text') || e.target.classList.contains('drop-divider') || e.target.classList.contains('upload-icon')) {
         this.elements.fileInput.click();
       }
@@ -707,7 +1010,7 @@ class UIController {
       }
     });
 
-    // Keyboard navigation for drop zone
+    // Keyboard navigation for drop zone (accessibility — Space/Enter activates it)
     this.elements.dropZone.addEventListener('keydown', (e) => {
       if (e.key === CONSTANTS.KEYBOARD_SHORTCUTS.ENTER || e.key === ' ') {
         e.preventDefault();
@@ -715,42 +1018,32 @@ class UIController {
       }
     });
 
-    // Process button
-    this.elements.processBtn.addEventListener('click', () => {
-      this.processData();
-    });
+    // --- Step buttons ---
+    this.elements.processBtn.addEventListener('click', () => this.processData());
+    this.elements.downloadBtn.addEventListener('click', () => this.downloadCSV());
 
-    // Download button
-    this.elements.downloadBtn.addEventListener('click', () => {
-      this.downloadCSV();
-    });
+    // --- Category review toolbar ---
+    this.elements.expandAllBtn.addEventListener('click', () => this.expandAllCategories());
+    this.elements.collapseAllBtn.addEventListener('click', () => this.collapseAllCategories());
 
-    // Category review controls
-    this.elements.expandAllBtn.addEventListener('click', () => {
-      this.expandAllCategories();
-    });
-
-    this.elements.collapseAllBtn.addEventListener('click', () => {
-      this.collapseAllCategories();
-    });
-
+    // Search input: filters item cards within the accordion in real time
     this.elements.categorySearch.addEventListener('input', (e) => {
       this.filterItems(e.target.value);
     });
 
-    // Keyboard shortcuts
+    // --- Global keyboard shortcuts ---
     document.addEventListener('keydown', (e) => {
-      // Ctrl/Cmd + O to open file
+      // Ctrl/Cmd + O — open file picker
       if ((e.ctrlKey || e.metaKey) && e.key === 'o') {
         e.preventDefault();
         this.elements.fileInput.click();
       }
-      // Ctrl/Cmd + P to process (if enabled)
+      // Ctrl/Cmd + P — process file (only when the button is enabled)
       if ((e.ctrlKey || e.metaKey) && e.key === 'p' && !this.elements.processBtn.disabled) {
         e.preventDefault();
         this.processData();
       }
-      // Ctrl/Cmd + F to focus search (when category review is visible)
+      // Ctrl/Cmd + F — focus search box (only when the category review is visible)
       if ((e.ctrlKey || e.metaKey) && e.key === 'f' && !this.elements.categoryReview.classList.contains('hidden')) {
         e.preventDefault();
         this.elements.categorySearch.focus();
@@ -794,7 +1087,11 @@ class UIController {
   }
 
   /**
-   * Process the uploaded data
+   * Run the full processing pipeline on the loaded Bitwarden JSON.
+   *
+   * Processing is wrapped in requestAnimationFrame() so the loading overlay
+   * has a chance to paint before the synchronous CPU work begins.
+   * The overlay is always hidden in the finally block regardless of success/failure.
    */
   async processData() {
     if (!this.state.rawData) {
@@ -802,21 +1099,24 @@ class UIController {
       return;
     }
 
-    // Show loading state
     this.setProcessingState(true);
     LoadingOverlay.show();
 
-    // Use requestAnimationFrame for better performance
+    // Yield to the browser so the spinner renders before we block the thread
     requestAnimationFrame(() => {
       try {
         DataProcessor.process(this.state.rawData, this.state);
-        
+        this.state.initVaultMappings();
+
         this.renderStats();
         this.renderPasskeys();
         this.renderCategoryReview();
-        
+        this.renderVaultSetup();
+
         this.elements.results.classList.remove('hidden');
         this.elements.categoryReview.classList.remove('hidden');
+        this.elements.vaultSetup.classList.remove('hidden');
+        this.elements.downloadSection.classList.remove('hidden');
         
         if (this.state.passkeys.length > 0) {
           this.elements.passkeySection.classList.remove('hidden');
@@ -858,12 +1158,17 @@ class UIController {
   }
 
   /**
-   * Render statistics
+   * Render the Results section: four summary stat cards + category breakdown.
+   *
+   * The four stat items and the category breakdown are all children of the same
+   * CSS grid (#stats). The breakdown div uses `grid-column: 1 / -1` in CSS so
+   * it always spans the full width regardless of how many columns the grid has,
+   * preventing it from being placed next to a stat card on wider screens.
    */
   renderStats() {
     const { totalItems, withPasswords, withPasskeys, withTOTP, byCategory } = this.state.stats;
-    
-    // Main stats
+
+    // Four top-level stat cards
     let statsHTML = `
       <div class="stat-item">
         <span class="stat-value">${totalItems}</span>
@@ -899,11 +1204,15 @@ class UIController {
         .sort((a, b) => b[1] - a[1]);
       
       sortedCategories.forEach(([category, count]) => {
+        const pct = totalItems > 0 ? Math.round((count / totalItems) * 100) : 0;
         const item = document.createElement('div');
         item.className = 'category-item';
         item.innerHTML = `
-          <span class="category-name">${category}</span>
-          <span class="category-count">${count}</span>
+          <span class="category-name">${Utils.sanitizeText(category)}</span>
+          <div class="category-item-right">
+            <div class="category-bar-wrap" aria-hidden="true"><div class="category-bar" style="width:${pct}%"></div></div>
+            <span class="category-count" title="${pct}%">${count}</span>
+          </div>
         `;
         categoryList.appendChild(item);
       });
@@ -986,7 +1295,67 @@ class UIController {
   }
 
   /**
-   * Download CSV file
+   * Render vault mapping inputs and summary
+   */
+  renderVaultSetup() {
+    const categories = Object.keys(this.state.stats.byCategory).sort();
+
+    this.elements.vaultMappingTable.innerHTML = categories.map(category => {
+      const count = this.state.stats.byCategory[category] || 0;
+      const vaultName = this.state.vaultMappings[category] || category;
+      return `
+        <div class="vault-row" role="listitem">
+          <span class="vault-category-label">${Utils.sanitizeText(category)}</span>
+          <span class="vault-arrow" aria-hidden="true">&#8594;</span>
+          <input
+            type="text"
+            class="vault-name-input"
+            data-category="${Utils.sanitizeText(category)}"
+            value="${Utils.sanitizeText(vaultName)}"
+            placeholder="Vault name"
+            aria-label="Vault name for ${Utils.sanitizeText(category)} category"
+            maxlength="50"
+          >
+          <span class="vault-item-count">${count} item${count !== 1 ? 's' : ''}</span>
+        </div>`;
+    }).join('');
+
+    this.elements.vaultMappingTable.querySelectorAll('.vault-name-input').forEach(input => {
+      input.addEventListener('input', Utils.debounce(() => {
+        this.state.updateVaultMapping(input.dataset.category, input.value);
+        this.updateVaultSummary();
+      }, 200));
+    });
+
+    this.updateVaultSummary();
+  }
+
+  /**
+   * Update the vault summary list
+   */
+  updateVaultSummary() {
+    const vaults = this.state.getUniqueVaults();
+    this.elements.vaultList.innerHTML = vaults.map(v => {
+      const mergeNote = v.categories.length > 1
+        ? `<span class="vault-merge-note">merges: ${v.categories.map(c => Utils.sanitizeText(c)).join(', ')}</span>`
+        : '';
+      return `<li class="vault-list-item">
+        <span class="vault-list-name">${Utils.sanitizeText(v.name)}</span>
+        <span class="vault-list-count">${v.count} item${v.count !== 1 ? 's' : ''}</span>
+        ${mergeNote}
+      </li>`;
+    }).join('');
+  }
+
+  /**
+   * Trigger a browser download of the Proton Pass–compatible CSV file.
+   *
+   * Always calls regenerateCSV() first to capture any category or vault name
+   * changes made after the initial process() run.
+   *
+   * Download mechanism: Blob → object URL → invisible <a> click → revoke URL.
+   * This is the standard client-side file download pattern and works in all
+   * modern browsers without requiring a server round-trip.
    */
   downloadCSV() {
     if (!this.state.processedCSV) {
@@ -994,7 +1363,7 @@ class UIController {
       return;
     }
 
-    // Regenerate CSV with any category changes
+    // Rebuild CSV from current item/vault state before writing to disk
     this.state.regenerateCSV();
 
     try {
@@ -1021,9 +1390,30 @@ class UIController {
   }
 
   /**
-   * Render category review with card grid layout
+   * Render the "Review & Edit Categories" accordion.
+   *
+   * Structure rendered into #categoryAccordion:
+   *   .category-grid          — row of filter pills (All | Finance (29) | Tech (44) | …)
+   *   .category-section       — one per category, expanded/collapsed via CSS class
+   *     .category-header      — clickable <button> that toggles the section
+   *     .category-content
+   *       .category-items     — grid of .category-item-card elements
+   *
+   * @param {boolean} preserveExpandedState
+   *   false (default) — first section is expanded, all others collapsed.
+   *   true  — re-read which sections are currently expanded before re-rendering
+   *           and restore them. Used by handleCategoryChange() so moving an item
+   *           doesn't collapse sections the user had open.
    */
   renderCategoryReview(preserveExpandedState = false) {
+    // Snapshot which sections are open before we wipe innerHTML
+    const expandedCategories = new Set();
+    if (preserveExpandedState) {
+      this.elements.categoryAccordion.querySelectorAll('.category-section.expanded').forEach(s => {
+        expandedCategories.add(s.dataset.category);
+      });
+    }
+
     // Group items by category
     const itemsByCategory = {};
     this.state.items.forEach((item, index) => {
@@ -1033,87 +1423,143 @@ class UIController {
       itemsByCategory[item.category].push({ ...item, index });
     });
 
-    // Sort categories by count
     const sortedCategories = Object.entries(itemsByCategory)
       .sort((a, b) => b[1].length - a[1].length);
 
-    // Create category grid container if it doesn't exist
-    let categoryGrid = this.elements.categoryAccordion.querySelector('.category-grid');
-    if (!categoryGrid) {
-      categoryGrid = document.createElement('div');
-      categoryGrid.className = 'category-grid';
-      this.elements.categoryAccordion.appendChild(categoryGrid);
-    }
+    this.elements.categoryAccordion.innerHTML = '';
 
-    // Clear and rebuild category filters
-    categoryGrid.innerHTML = '';
-    
-    // Add "All" filter
+    // --- Filter pills ---
+    const categoryGrid = document.createElement('div');
+    categoryGrid.className = 'category-grid';
+
     const allFilter = document.createElement('button');
+    allFilter.type = 'button';
     allFilter.className = 'category-filter active';
     allFilter.textContent = 'All';
-    allFilter.addEventListener('click', () => {
-      this.filterByCategory(null);
-    });
+    allFilter.addEventListener('click', () => this.filterByCategory(null));
     categoryGrid.appendChild(allFilter);
 
-    // Add individual category filters
     sortedCategories.forEach(([category, items]) => {
       const filter = document.createElement('button');
+      filter.type = 'button';
       filter.className = 'category-filter';
       filter.textContent = `${category} (${items.length})`;
       filter.dataset.category = category;
-      filter.addEventListener('click', () => {
-        this.filterByCategory(category);
-      });
+      filter.addEventListener('click', () => this.filterByCategory(category));
       categoryGrid.appendChild(filter);
     });
 
-    // Create items grid
-    let itemsGrid = this.elements.categoryAccordion.querySelector('.items-grid');
-    if (!itemsGrid) {
-      itemsGrid = document.createElement('div');
-      itemsGrid.className = 'items-grid';
-      this.elements.categoryAccordion.appendChild(itemsGrid);
-    }
+    this.elements.categoryAccordion.appendChild(categoryGrid);
 
-    itemsGrid.innerHTML = '';
+    // --- Accordion sections ---
+    sortedCategories.forEach(([category, items], idx) => {
+      const isExpanded = preserveExpandedState
+        ? expandedCategories.has(category)
+        : idx === 0;
 
-    // Render all items as cards
-    this.state.items.forEach((item, index) => {
-      const card = this.createItemCard(item, index);
-      itemsGrid.appendChild(card);
+      const section = document.createElement('div');
+      section.className = 'category-section' + (isExpanded ? ' expanded' : '');
+      section.dataset.category = category;
+
+      // Header button
+      const header = document.createElement('button');
+      header.type = 'button';
+      header.className = 'category-header';
+      header.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+      header.setAttribute('aria-controls', `cat-content-${category}`);
+
+      const headerLeft = document.createElement('div');
+      headerLeft.className = 'category-header-left';
+
+      const title = document.createElement('span');
+      title.className = 'category-title';
+      title.textContent = category;
+
+      const badge = document.createElement('span');
+      badge.className = 'category-badge';
+      badge.textContent = items.length;
+
+      headerLeft.appendChild(title);
+      headerLeft.appendChild(badge);
+
+      const chevron = document.createElement('span');
+      chevron.className = 'category-chevron';
+      chevron.setAttribute('aria-hidden', 'true');
+      chevron.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
+
+      header.appendChild(headerLeft);
+      header.appendChild(chevron);
+      header.addEventListener('click', () => {
+        const expanded = section.classList.toggle('expanded');
+        header.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      });
+
+      // Content
+      const content = document.createElement('div');
+      content.className = 'category-content';
+      content.id = `cat-content-${category}`;
+
+      const itemsGrid = document.createElement('div');
+      itemsGrid.className = 'category-items';
+      items.forEach(item => itemsGrid.appendChild(this.createItemCard(item)));
+
+      content.appendChild(itemsGrid);
+      section.appendChild(header);
+      section.appendChild(content);
+      this.elements.categoryAccordion.appendChild(section);
     });
   }
 
   /**
-   * Filter items by category
+   * Filter the accordion to show only a specific category, or all categories.
+   *
+   * Operates on entire .category-section elements (not individual cards).
+   * When a specific category is selected, its section is auto-expanded so
+   * the user doesn't have to click twice.
+   *
+   * @param {string|null} category — category name to isolate, or null to show all
    */
   filterByCategory(category) {
-    const cards = this.elements.categoryAccordion.querySelectorAll('.category-item-card');
     const filters = this.elements.categoryAccordion.querySelectorAll('.category-filter');
+    const sections = this.elements.categoryAccordion.querySelectorAll('.category-section');
 
-    // Update active filter
     filters.forEach(filter => {
-      if (category === null) {
-        filter.classList.toggle('active', filter.textContent.startsWith('All'));
-      } else {
-        filter.classList.toggle('active', filter.dataset.category === category);
-      }
+      filter.classList.toggle('active',
+        category === null ? !filter.dataset.category : filter.dataset.category === category
+      );
     });
 
-    // Filter cards
-    cards.forEach(card => {
+    sections.forEach(section => {
       if (category === null) {
-        card.classList.remove('hidden');
+        section.classList.remove('hidden');
       } else {
-        card.classList.toggle('hidden', card.dataset.category !== category);
+        const matches = section.dataset.category === category;
+        section.classList.toggle('hidden', !matches);
+        if (matches) {
+          section.classList.add('expanded');
+          section.querySelector('.category-header')?.setAttribute('aria-expanded', 'true');
+        }
       }
     });
   }
 
   /**
-   * Create an item card
+   * Build a single item card DOM element for the category review accordion.
+   *
+   * Card structure:
+   *   .category-item-card
+   *     .item-header        — item name + category <select> dropdown
+   *     .item-url           — primary URL (omitted if empty)
+   *     .item-details       — tag pills: Password, 2FA, Email/User
+   *
+   * The category <select> is debounced (150ms) so rapid changes don't trigger
+   * multiple re-renders. Changing the category calls handleCategoryChange()
+   * which updates AppState and re-renders the whole accordion.
+   *
+   * @param {{ index: number, name: string, url: string, email: string,
+   *           username: string, hasPassword: boolean, hasTotp: boolean,
+   *           category: string }} item
+   * @returns {HTMLElement}
    */
   createItemCard(item) {
     const card = document.createElement('div');
@@ -1185,7 +1631,12 @@ class UIController {
       details.appendChild(totpTag);
     }
 
-    if (item.username) {
+    if (item.email) {
+      const emailTag = document.createElement('span');
+      emailTag.className = 'item-tag';
+      emailTag.textContent = `Email: ${item.email}`;
+      details.appendChild(emailTag);
+    } else if (item.username) {
       const usernameTag = document.createElement('span');
       usernameTag.className = 'item-tag';
       usernameTag.textContent = `User: ${item.username}`;
@@ -1200,17 +1651,27 @@ class UIController {
   }
 
   /**
-   * Handle category change for an item
+   * Handle a category change triggered by the item card's <select> dropdown.
+   *
+   * After updating AppState the accordion is re-rendered with expanded state
+   * preserved (preserveExpandedState = true). Scroll position is saved before
+   * and restored via requestAnimationFrame after the re-render, because:
+   *   1. Re-rendering the accordion changes DOM height, which can shift the page.
+   *   2. The focused <select> blurs, which can trigger a browser auto-scroll.
+   * Saving scrollY → blurring → re-rendering → restoring scrollY prevents jump.
+   *
+   * @param {number} itemIndex — index into AppState.items[]
+   * @param {string} newCategory — the category the user selected
    */
   handleCategoryChange(itemIndex, newCategory) {
     const oldCategory = this.state.items[itemIndex].category;
-    
+
     if (oldCategory === newCategory) return;
 
-    // Save scroll position
+    // Capture scroll position before any DOM mutation
     const scrollY = window.scrollY;
-    
-    // Blur any focused element to prevent auto-scroll-to-focus behavior
+
+    // Blur first to prevent the browser from auto-scrolling to the re-focused element
     if (document.activeElement) {
       document.activeElement.blur();
     }
@@ -1232,20 +1693,31 @@ class UIController {
    * Expand all categories
    */
   expandAllCategories() {
-    const sections = this.elements.categoryAccordion.querySelectorAll('.category-section');
-    sections.forEach(section => section.classList.add('expanded'));
+    this.elements.categoryAccordion.querySelectorAll('.category-section').forEach(section => {
+      section.classList.add('expanded');
+      section.querySelector('.category-header')?.setAttribute('aria-expanded', 'true');
+    });
   }
 
   /**
    * Collapse all categories
    */
   collapseAllCategories() {
-    const sections = this.elements.categoryAccordion.querySelectorAll('.category-section');
-    sections.forEach(section => section.classList.remove('expanded'));
+    this.elements.categoryAccordion.querySelectorAll('.category-section').forEach(section => {
+      section.classList.remove('expanded');
+      section.querySelector('.category-header')?.setAttribute('aria-expanded', 'false');
+    });
   }
 
   /**
-   * Filter items based on search query
+   * Filter item cards within the accordion by name search query.
+   *
+   * Matches against the lowercased item name stored in card.dataset.itemName.
+   * After filtering, sections with at least one visible card are auto-expanded;
+   * sections where every card is hidden are auto-collapsed.
+   * Clearing the search (empty query) restores all cards.
+   *
+   * @param {string} query — raw value from the search input
    */
   filterItems(query) {
     const searchTerm = query.toLowerCase().trim();
@@ -1281,13 +1753,19 @@ class UIController {
 /* ===================================
    APPLICATION INITIALIZATION
    =================================== */
+/**
+ * Bootstrap the application once the DOM is fully parsed.
+ *
+ * Intentionally minimal: create one AppState and one UIController.
+ * All event wiring happens inside UIController's constructor, so there
+ * is nothing else to do here except show a welcome toast.
+ */
 document.addEventListener('DOMContentLoaded', () => {
   const appState = new AppState();
-  const uiController = new UIController(appState);
-  
-  // Show welcome message
+  const uiController = new UIController(appState); // eslint-disable-line no-unused-vars
+
   ToastManager.info('Ready to migrate your passwords securely');
-  
+
   console.log('Password Migration Tool initialized');
-  console.log('All processing happens locally - your data never leaves your device');
+  console.log('All processing happens locally — your data never leaves your device');
 });
