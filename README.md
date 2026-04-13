@@ -11,6 +11,8 @@ A secure, client-side password migration tool for converting Bitwarden exports t
 ### Core Functionality
 - **Client-Side Processing** - All data processing happens in your browser, ensuring complete privacy
 - **Automatic Categorization** - 12 smart categories with 200+ pre-mapped domains
+- **Smart Email/Username Detection** - Automatically routes email addresses to the `email` column and plain usernames to the `username` column (Bitwarden stores both in the same field)
+- **Vault Mapping** - Assign each category to a named Proton Pass vault before downloading; multiple categories can be merged into one vault
 - **Interactive Category Review** - Review and edit categories before export
 - **Passkey Detection** - Identifies and tracks passkeys that need manual migration
 - **Comprehensive Data Migration** - Preserves passwords, 2FA codes, notes, custom fields, and password history
@@ -83,11 +85,17 @@ npx http-server
 3. Use the dropdown on each item to change its category
 4. Use the search box to find specific items
 
-### Step 4: Download & Import
+### Step 4: Configure Vaults
+1. In the **"Configure Vaults"** section, each category has an input field showing its default vault name
+2. Rename any vault or type the same name in multiple categories to merge them
+3. The summary box shows the final list of unique vaults you need to create
+4. **Before downloading, go to Proton Pass and create every vault listed.** Items imported to a vault that doesn't exist yet will fall into your default vault.
+
+### Step 5: Download & Import
 1. Click **Download CSV for Proton Pass**
-2. Go to Proton Pass
-3. Import the CSV file
-4. Manually re-register any passkeys
+2. In Proton Pass, go to **Settings → Import → Proton Pass (CSV)**
+3. Select the downloaded file and import
+4. Manually re-register any passkeys listed in the warning section
 
 ## Security & Privacy
 
@@ -135,8 +143,8 @@ The tool generates a CSV file with the following columns:
 - `type` - Always "login"
 - `name` - Item name
 - `url` - Primary URL
-- `email` - Email/username field
-- `username` - Username
+- `email` - Populated when Bitwarden's `username` field contains an email address
+- `username` - Populated when Bitwarden's `username` field is a plain username (not an email)
 - `password` - Password
 - `note` - Combined notes (original notes, custom fields, password history, TOTP, extra URLs, metadata)
 - `totp` - 2FA TOTP code
